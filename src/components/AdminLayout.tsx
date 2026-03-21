@@ -66,9 +66,9 @@ export default function AdminLayout() {
     return (
         <div className="min-h-screen bg-gray-100 flex flex-col md:flex-row">
             {/* Sidebar Navigation */}
-            <aside className="w-full md:w-64 bg-white border-r border-gray-200 flex flex-col shadow-sm">
-                <div className="p-6 border-b border-gray-100">
-                    <h1 className="text-2xl font-bold font-serif text-blue-900">Cafe Admin</h1>
+            <aside className="w-full md:w-64 bg-white border-r border-gray-200 flex flex-col shadow-sm md:sticky md:top-0 md:h-screen">
+                <div className="p-6 border-b border-gray-100 flex justify-center items-center h-24">
+                    <img src="/admin-logo.png" alt="Cafe Admin Logo" className="max-h-full object-contain" />
                 </div>
 
                 <nav className="p-4 space-y-2 flex-grow">
@@ -96,16 +96,15 @@ export default function AdminLayout() {
                     })}
                 </nav>
 
-                <div className="p-4 border-t border-gray-100 flex flex-col gap-2">
-                    {deferredPrompt && (
-                        <button
-                            onClick={handleInstallClick}
-                            className="flex items-center gap-3 px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-medium transition-colors w-full shadow-sm"
-                        >
-                            <Download size={20} />
-                            Install App
-                        </button>
-                    )}
+                <div className="p-4 border-t border-gray-100 flex flex-col gap-2 mt-auto">
+                    <button
+                        onClick={handleInstallClick}
+                        className={`flex items-center gap-3 px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-lg font-medium transition-colors w-full shadow-sm ${!deferredPrompt ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        title={!deferredPrompt ? "App is already installed or not supported in this browser" : "Install App"}
+                    >
+                        <Download size={20} />
+                        Install App
+                    </button>
                     <button
                         onClick={handleLogout}
                         className="flex items-center gap-3 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg font-medium transition-colors w-full"

@@ -31,10 +31,8 @@ export default function AdminLoginPage() {
     return (
         <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
             <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8 border border-gray-100">
-                <div className="flex justify-center mb-6">
-                    <div className="w-16 h-16 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center shadow-inner">
-                        <Coffee size={32} />
-                    </div>
+                <div className="flex justify-center mb-6 h-20">
+                    <img src="/admin-logo.png" alt="Cafe Admin Logo" className="max-h-full object-contain" />
                 </div>
                 <h1 className="text-2xl font-bold text-center text-gray-900 mb-8">Admin Login</h1>
 
