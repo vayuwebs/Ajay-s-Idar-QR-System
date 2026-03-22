@@ -5,11 +5,11 @@ export default function HomePage() {
     return (
         <div className="min-h-screen bg-gray-50 flex flex-col items-center p-8">
             <main className="flex-1 flex flex-col items-center justify-center max-w-3xl text-center">
-                <div className="bg-blue-100 text-blue-700 p-4 rounded-full mb-8">
-                    <Coffee size={48} />
+                <div className="mb-8 w-48 h-48 flex items-center justify-center">
+                    <img src="/client-logo.png" alt="Cafe Logo" className="max-w-full max-h-full object-contain drop-shadow-md" />
                 </div>
 
-                <h1 className="text-5xl font-extrabold text-gray-900 tracking-tight mb-6">
+                <h1 className="text-5xl font-extrabold text-gray-900 tracking-tight mb-6 hidden">
                     Cafe QR Ordering System
                 </h1>
 
