@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { supabase } from '@/lib/supabase';
 import { closeTable } from '@/services/orderService';
-import { CheckCircle2, Clock, XCircle, Grid, Bell, BellOff, Edit2, Play, Trash2, Plus, Minus, X, Search, ShoppingCart } from 'lucide-react';
+import { getSettings, AppSettings } from '@/services/settingsService';
+import { CheckCircle2, Clock, XCircle, Grid, Bell, BellOff, Edit2, Play, Trash2, Plus, Minus, X, Search, ShoppingCart, CreditCard } from 'lucide-react';
 
 export default function AdminOrders() {
     const [orders, setOrders] = useState<any[]>([]);
@@ -22,6 +23,10 @@ export default function AdminOrders() {
     const [editItems, setEditItems] = useState<any[]>([]);
     const [isSavingEdit, setIsSavingEdit] = useState(false);
     const channelRef = useRef<any>(null);
+
+    const [settings, setSettings] = useState<AppSettings | null>(null);
+    const [paymentModalState, setPaymentModalState] = useState<{ isOpen: boolean; session: any; total: number } | null>(null);
+    const [isMarkingPaid, setIsMarkingPaid] = useState(false);
 
     useEffect(() => {
         ordersRef.current = orders;
@@ -209,6 +214,13 @@ export default function AdminOrders() {
         };
         fetchMenuItems();
 
+        // Fetch settings
+        const fetchPaymentSettings = async () => {
+            const data = await getSettings();
+            if (data) setSettings(data);
+        };
+        fetchPaymentSettings();
+
 
         // === SHARED COMMUNICATION CHANNEL (BROADCAST + REALTIME) ===
         const channel = supabase
@@ -271,6 +283,23 @@ export default function AdminOrders() {
                 });
             }
             fetchOrders();
+        }
+    };
+
+    const handleMarkAsPaid = async () => {
+        if (!paymentModalState) return;
+        setIsMarkingPaid(true);
+        try {
+            const sessionOrders = orders.filter(o => o.session_id === paymentModalState.session.id && o.payment_status !== 'paid');
+            for (const o of sessionOrders) {
+                await supabase.from('orders').update({ payment_status: 'paid' }).eq('id', o.id);
+            }
+            setPaymentModalState(null);
+            fetchOrders();
+        } catch (err) {
+            alert('Failed to mark as paid');
+        } finally {
+            setIsMarkingPaid(false);
         }
     };
 
@@ -441,6 +470,15 @@ export default function AdminOrders() {
                     {activeSessions.map((group) => {
                         const { session, table, orders: sessionOrders } = group;
                         const totalSessionAmount = sessionOrders.reduce((sum, o) => sum + Number(o.total_amount), 0);
+                        
+                        const unpaidOrders = sessionOrders.filter(o => o.payment_status !== 'paid' && o.status !== 'cancelled');
+                        const unpaidAmount = unpaidOrders.reduce((sum, o) => sum + Number(o.total_amount), 0);
+
+                        const totalWithCharges = settings ? (
+                            settings.charge_type === 'fixed' 
+                                ? (unpaidAmount > 0 ? unpaidAmount + settings.charge_amount : 0)
+                                : unpaidAmount + (unpaidAmount * settings.charge_amount / 100)
+                        ) : unpaidAmount;
 
                         return (
                             <div key={session.id} className="bg-white rounded-2xl shadow-md border border-gray-200 overflow-hidden">
@@ -454,9 +492,32 @@ export default function AdminOrders() {
                                             <p className="text-blue-100 text-sm font-medium">Session ID: {session.id.substring(0, 6)}...</p>
                                         </div>
                                     </div>
-                                    <div className="text-right">
-                                        <p className="text-blue-100 text-xs uppercase tracking-wider font-bold mb-1">Session Total</p>
-                                        <p className="text-2xl font-bold">₹{totalSessionAmount.toFixed(2)}</p>
+                                    <div className="flex flex-col items-end gap-2 text-right">
+                                        <div>
+                                            <p className="text-blue-100 text-xs uppercase tracking-wider font-bold mb-1">Session Total</p>
+                                            <p className="text-2xl font-bold">₹{totalSessionAmount.toFixed(2)}</p>
+                                        </div>
+                                        {settings?.payment_timing === 'after_order' && unpaidAmount > 0 && (
+                                            <button 
+                                                onClick={() => {
+                                                    setPaymentModalState({ isOpen: true, session, total: totalWithCharges });
+                                                    // Broadcast to customer's device
+                                                    supabase.channel('cafe_communications').send({
+                                                        type: 'broadcast',
+                                                        event: 'PAYMENT_REQUESTED',
+                                                        payload: { sessionId: session.id, amount: totalWithCharges }
+                                                    });
+                                                }}
+                                                className="bg-white text-blue-600 hover:bg-blue-50 px-3 py-1.5 rounded-lg text-sm font-bold shadow-sm transition flex items-center gap-1.5"
+                                            >
+                                                <CreditCard size={14} /> Take Payment (₹{totalWithCharges.toFixed(2)})
+                                            </button>
+                                        )}
+                                        {unpaidAmount === 0 && sessionOrders.length > 0 && settings?.payment_timing !== 'dont_take_payment' && (
+                                            <span className="bg-green-500/20 text-green-100 border border-green-400/30 px-2 py-1 rounded text-xs font-bold flex items-center justify-center gap-1 w-full">
+                                                <CheckCircle2 size={12} /> Paid
+                                            </span>
+                                        )}
                                     </div>
                                 </div>
 
@@ -710,6 +771,49 @@ export default function AdminOrders() {
                                 </button>
                             </div>
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Payment Modal */}
+            {paymentModalState?.isOpen && settings && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl p-6 text-center">
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-xl font-bold text-gray-900">Take Payment</h2>
+                            <button onClick={() => setPaymentModalState(null)} className="text-gray-400 hover:text-gray-600">
+                                <X size={24} />
+                            </button>
+                        </div>
+                        
+                        <div className="bg-blue-50 p-4 rounded-xl mb-6">
+                            <p className="text-sm text-blue-600 font-bold mb-1">{paymentModalState.session.customer_name} - Table {paymentModalState.session.tables?.table_number}</p>
+                            <div className="flex justify-between font-black text-2xl text-blue-900 mt-2">
+                                <span>Total:</span>
+                                <span>₹{paymentModalState.total.toFixed(2)}</span>
+                            </div>
+                        </div>
+
+                        {settings.upi_id && (
+                            <div className="flex flex-col items-center mb-6">
+                                <div className="bg-white p-2 rounded-xl border-2 border-blue-100 shadow-sm mb-3">
+                                    <img 
+                                        src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`upi://pay?pa=${settings.upi_id}&pn=${settings.payee_name || 'Cafe'}&am=${paymentModalState.total.toFixed(2)}&tn=Table_${paymentModalState.session.tables?.table_number}&cu=INR`)}`} 
+                                        alt="UPI QR Code" 
+                                        className="w-48 h-48"
+                                    />
+                                </div>
+                                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">Show QR to Customer</p>
+                            </div>
+                        )}
+
+                        <button
+                            onClick={handleMarkAsPaid}
+                            disabled={isMarkingPaid}
+                            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 px-4 rounded-xl transition shadow-lg shadow-blue-200 disabled:opacity-50 flex justify-center items-center gap-2"
+                        >
+                            {isMarkingPaid ? 'Processing...' : <><CheckCircle2 size={20} /> Mark as Paid</>}
+                        </button>
                     </div>
                 </div>
             )}

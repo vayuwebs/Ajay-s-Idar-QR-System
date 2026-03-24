@@ -8,7 +8,8 @@ export async function placeOrder(
     sessionId: string,
     tableId: string,
     items: Array<{ item_id: string; quantity: number; price: number }>,
-    totalAmountToAdd: number
+    totalAmountToAdd: number,
+    paymentStatus: string = 'pending'
 ) {
     // 1. Validate Session & Table Ownership
     const { data: session, error: sessionError } = await supabase
@@ -33,12 +34,18 @@ export async function placeOrder(
 
     // 2. Find existing pending order (Running Tab) OR create a new one
     let orderId: string;
-    const { data: existingOrder } = await supabase
-        .from('orders')
-        .select('id, total_amount')
-        .eq('session_id', sessionId)
-        .eq('status', 'pending')
-        .single();
+    let existingOrder = null;
+    
+    // Only try to merge if we are not paying upfront for this specific sub-order
+    if (paymentStatus !== 'paid') {
+        const { data: foundOrder } = await supabase
+            .from('orders')
+            .select('id, total_amount')
+            .eq('session_id', sessionId)
+            .eq('status', 'pending')
+            .single();
+        existingOrder = foundOrder;
+    }
 
     if (existingOrder) {
         orderId = existingOrder.id;
@@ -55,6 +62,7 @@ export async function placeOrder(
                 table_id: tableId,
                 total_amount: totalAmountToAdd,
                 status: 'pending',
+                payment_status: paymentStatus
             })
             .select('id')
             .single();

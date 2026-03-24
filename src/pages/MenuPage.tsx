@@ -2,7 +2,8 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { supabase } from '@/lib/supabase';
 import { placeOrder } from '@/services/orderService';
-import { ShoppingCart, Plus, Minus, Coffee, XCircle, History, Clock, Flame, CheckCircle2, Bell, Play } from 'lucide-react';
+import { getSettings, AppSettings } from '@/services/settingsService';
+import { ShoppingCart, Plus, Minus, Coffee, XCircle, History, Clock, Flame, CheckCircle2, Bell, Play, Grid, List, Trash2 } from 'lucide-react';
 
 export default function MenuPage() {
     const [searchParams] = useSearchParams();
@@ -15,6 +16,13 @@ export default function MenuPage() {
     const [error, setError] = useState('');
     const [categories, setCategories] = useState<any[]>([]);
     const [menuItems, setMenuItems] = useState<any[]>([]);
+    
+    const [settings, setSettings] = useState<AppSettings | null>(null);
+    const [showPaymentModal, setShowPaymentModal] = useState(false);
+    const [showCart, setShowCart] = useState(false);
+    const [isGridView, setIsGridView] = useState(true);
+    const [incomingPayment, setIncomingPayment] = useState<{ amount: number } | null>(null);
+    const [showSelfPay, setShowSelfPay] = useState(false);
 
     const [customerName, setCustomerName] = useState('');
     const [runningTotal, setRunningTotal] = useState(0);
@@ -78,6 +86,9 @@ export default function MenuPage() {
                 const { data: items } = await supabase.from('menu_items').select('*').eq('is_available', true).order('sort_order', { ascending: true });
                 if (items) setMenuItems(items);
 
+                const fetchedSettings = await getSettings();
+                if (fetchedSettings) setSettings(fetchedSettings);
+
                 await fetchRunningOrder();
 
                 // Request notification permission
@@ -104,6 +115,16 @@ export default function MenuPage() {
                                     triggerReadyNotification();
                                 }
                                 fetchRunningOrder();
+                            }
+                        }
+                    )
+                    .on(
+                        'broadcast',
+                        { event: 'PAYMENT_REQUESTED' },
+                        (payload: any) => {
+                            console.log('💰 Payment requested!', payload);
+                            if (payload.payload.sessionId === sessionId) {
+                                setIncomingPayment({ amount: payload.payload.amount });
                             }
                         }
                     )
@@ -229,17 +250,56 @@ export default function MenuPage() {
         return total + (item?.price || 0) * quantity;
     }, 0);
 
+    const calculateTotalWithCharges = () => {
+        if (!settings || settings.charge_amount === 0) return cartTotal;
+        return settings.charge_type === 'fixed' 
+            ? cartTotal + settings.charge_amount 
+            : cartTotal + (cartTotal * settings.charge_amount / 100);
+    };
+
+    const calculateSelfPayTotal = () => {
+        if (!settings || settings.charge_amount === 0) return runningTotal;
+        return settings.charge_type === 'fixed' 
+            ? runningTotal + settings.charge_amount 
+            : runningTotal + (runningTotal * settings.charge_amount / 100);
+    };
+
+    const handleSelfPayConfirm = () => {
+        supabase.channel('cafe_communications').send({
+            type: 'broadcast',
+            event: 'CUSTOMER_PAID',
+            payload: { sessionId, tableNumber: tableNumber || tableId, amount: calculateSelfPayTotal() }
+        });
+        alert('Thank you! The manager has been notified.');
+        setShowSelfPay(false);
+    };
+
     const handlePlaceOrder = async () => {
         if (Object.keys(cart).length === 0 || !sessionId || !tableId) return;
+
+        if (settings?.payment_timing === 'while_ordering') {
+            setShowCart(false);
+            setShowPaymentModal(true);
+            return;
+        }
+
+        await executeOrderPlacement('pending');
+    };
+
+    const executeOrderPlacement = async (paymentStatus: string = 'pending') => {
         setIsPlacingOrder(true);
+        setShowPaymentModal(false);
+        setShowCart(false);
 
         const orderItemsList = Object.entries(cart).map(([itemId, quantity]) => {
             const item = menuItems.find((i) => i.id === itemId);
             return { item_id: itemId, quantity, price: item?.price };
         });
 
+        const finalTotal = calculateTotalWithCharges();
+
         try {
-            await placeOrder(sessionId, tableId, orderItemsList as any, cartTotal);
+            await placeOrder(sessionId as string, tableId as string, orderItemsList as any, finalTotal, paymentStatus);
 
             alert('Items added to your running order!');
 
@@ -249,7 +309,7 @@ export default function MenuPage() {
                     const i = menuItems.find(m => m.id === oi.item_id);
                     return { name: i?.name, quantity: oi.quantity, price: oi.price };
                 }),
-                total: cartTotal,
+                total: finalTotal,
             };
             const updatedHistory = [newHistoryEntry, ...localHistory];
             setLocalHistory(updatedHistory);
@@ -311,12 +371,21 @@ export default function MenuPage() {
                             <p className="text-[10px] font-bold text-white/90">Table {tableNumber || tableId}</p>
                         </div>
                     </div>
-                    <button
-                        onClick={() => setShowHistory(true)}
-                        className="flex items-center gap-2 px-3 py-2 bg-white/60 hover:bg-white/90 rounded-full text-teal-700 font-semibold transition text-sm shadow-sm backdrop-blur-md"
-                    >
-                        <History size={16} />
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => setIsGridView(!isGridView)}
+                            className="flex items-center gap-2 p-2 bg-white/60 hover:bg-white/90 rounded-full text-teal-700 font-semibold transition text-sm shadow-sm backdrop-blur-md"
+                            title={isGridView ? 'Switch to List View' : 'Switch to Grid View'}
+                        >
+                            {isGridView ? <List size={16} /> : <Grid size={16} />}
+                        </button>
+                        <button
+                            onClick={() => setShowHistory(true)}
+                            className="flex items-center gap-2 p-2 bg-white/60 hover:bg-white/90 rounded-full text-teal-700 font-semibold transition text-sm shadow-sm backdrop-blur-md"
+                        >
+                            <History size={16} />
+                        </button>
+                    </div>
                 </div>
             </header>
 
@@ -385,12 +454,22 @@ export default function MenuPage() {
                             ))}
                         </div>
 
-                        <div className="glass-panel p-5 rounded-3xl flex justify-between items-center bg-white border border-teal-100 shadow-sm">
-                            <div className="flex flex-col">
-                                <span className="text-teal-900 font-extrabold text-sm uppercase tracking-wider">Total Bill Amount</span>
-                                <span className="text-[10px] text-teal-600 font-bold">(Completed Orders Only)</span>
+                        <div className="glass-panel p-5 rounded-3xl bg-white border border-teal-100 shadow-sm">
+                            <div className="flex justify-between items-center">
+                                <div className="flex flex-col">
+                                    <span className="text-teal-900 font-extrabold text-sm uppercase tracking-wider">Total Bill Amount</span>
+                                    <span className="text-[10px] text-teal-600 font-bold">(Completed Orders Only)</span>
+                                </div>
+                                <span className="text-3xl font-black text-teal-900">₹{runningTotal.toFixed(2)}</span>
                             </div>
-                            <span className="text-3xl font-black text-teal-900">₹{runningTotal.toFixed(2)}</span>
+                            {settings && settings.payment_timing !== 'dont_take_payment' && runningTotal > 0 && (
+                                <button
+                                    onClick={() => setShowSelfPay(true)}
+                                    className="mt-3 w-full bg-gradient-to-r from-teal-500 to-emerald-500 text-white font-bold py-3 rounded-2xl shadow-lg shadow-teal-200 transition-all hover:shadow-xl active:scale-[0.98] flex items-center justify-center gap-2 text-sm"
+                                >
+                                    <ShoppingCart size={16} /> Pay Now
+                                </button>
+                            )}
                         </div>
                     </div>
                 )}
@@ -405,8 +484,9 @@ export default function MenuPage() {
                             <h2 className="text-xl font-extrabold text-foreground mb-4 pl-2 drop-shadow-sm">
                                 {category.name}
                             </h2>
-                            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                            <div className={isGridView ? "grid grid-cols-2 md:grid-cols-3 gap-4" : "flex flex-col gap-3"}>
                                 {catItems.map((item) => (
+                                    isGridView ? (
                                     <div key={item.id} className="glass-panel p-4 rounded-3xl flex flex-col hover:shadow-lg transition-all duration-300 h-full">
                                         <div className="w-full aspect-square max-h-40 bg-gray-50 rounded-2xl mb-4 flex-shrink-0 flex items-center justify-center text-xs text-teal-600 font-bold overflow-hidden shadow-sm relative">
                                             {item.image_url ? (
@@ -415,40 +495,51 @@ export default function MenuPage() {
                                                 <span className="opacity-50 flex flex-col items-center gap-1"><Coffee size={24} className="opacity-40" /> No Image</span>
                                             )}
                                         </div>
-
                                         <div className="flex-1 flex flex-col items-center text-center">
                                             <h3 className="font-bold text-foreground text-base line-clamp-1">{item.name}</h3>
                                             <p className="text-[10px] sm:text-xs text-gray-500 mb-3 leading-relaxed line-clamp-2 flex-grow">{item.description}</p>
                                             <p className="font-extrabold text-teal-600 text-sm sm:text-[15px] mb-3">₹{item.price.toFixed(2)}</p>
                                         </div>
-
                                         <div className="flex items-center justify-center w-full">
                                             {cart[item.id] ? (
                                                 <div className="flex items-center bg-white/80 rounded-full p-1 shadow-sm border border-white">
-                                                    <button
-                                                        onClick={() => removeFromCart(item.id)}
-                                                        className="w-8 h-8 rounded-full flex items-center justify-center text-gray-500 hover:bg-gray-100 transition-colors"
-                                                    >
-                                                        <Minus size={16} />
-                                                    </button>
+                                                    <button onClick={() => removeFromCart(item.id)} className="w-8 h-8 rounded-full flex items-center justify-center text-gray-500 hover:bg-gray-100 transition-colors"><Minus size={16} /></button>
                                                     <span className="w-6 text-center font-bold text-foreground text-sm">{cart[item.id]}</span>
-                                                    <button
-                                                        onClick={() => addToCart(item.id)}
-                                                        className="w-8 h-8 rounded-full flex items-center justify-center text-teal-600 hover:bg-teal-50 transition-colors"
-                                                    >
-                                                        <Plus size={16} />
-                                                    </button>
+                                                    <button onClick={() => addToCart(item.id)} className="w-8 h-8 rounded-full flex items-center justify-center text-teal-600 hover:bg-teal-50 transition-colors"><Plus size={16} /></button>
                                                 </div>
                                             ) : (
-                                                <button
-                                                    onClick={() => addToCart(item.id)}
-                                                    className="w-10 h-10 bg-white/80 rounded-full flex items-center justify-center text-teal-600 shadow-sm border border-white hover:bg-white transition-all transform hover:scale-105 active:scale-95"
-                                                >
-                                                    <Plus size={20} strokeWidth={2.5} />
-                                                </button>
+                                                <button onClick={() => addToCart(item.id)} className="w-10 h-10 bg-white/80 rounded-full flex items-center justify-center text-teal-600 shadow-sm border border-white hover:bg-white transition-all transform hover:scale-105 active:scale-95"><Plus size={20} strokeWidth={2.5} /></button>
                                             )}
                                         </div>
                                     </div>
+                                    ) : (
+                                    /* List View */
+                                    <div key={item.id} className="glass-panel p-3 rounded-2xl flex items-center gap-3 hover:shadow-lg transition-all duration-300">
+                                        <div className="w-16 h-16 bg-gray-50 rounded-xl flex-shrink-0 flex items-center justify-center overflow-hidden shadow-sm">
+                                            {item.image_url ? (
+                                                <img src={item.image_url} alt={item.name} className="w-full h-full object-cover rounded-xl" />
+                                            ) : (
+                                                <Coffee size={20} className="opacity-30 text-teal-600" />
+                                            )}
+                                        </div>
+                                        <div className="flex-1 min-w-0">
+                                            <h3 className="font-bold text-foreground text-sm line-clamp-1">{item.name}</h3>
+                                            <p className="text-[10px] text-gray-500 line-clamp-1">{item.description}</p>
+                                            <p className="font-extrabold text-teal-600 text-sm mt-0.5">₹{item.price.toFixed(2)}</p>
+                                        </div>
+                                        <div className="flex-shrink-0">
+                                            {cart[item.id] ? (
+                                                <div className="flex items-center bg-white/80 rounded-full p-0.5 shadow-sm border border-white">
+                                                    <button onClick={() => removeFromCart(item.id)} className="w-7 h-7 rounded-full flex items-center justify-center text-gray-500 hover:bg-gray-100 transition-colors"><Minus size={14} /></button>
+                                                    <span className="w-5 text-center font-bold text-foreground text-xs">{cart[item.id]}</span>
+                                                    <button onClick={() => addToCart(item.id)} className="w-7 h-7 rounded-full flex items-center justify-center text-teal-600 hover:bg-teal-50 transition-colors"><Plus size={14} /></button>
+                                                </div>
+                                            ) : (
+                                                <button onClick={() => addToCart(item.id)} className="w-9 h-9 bg-white/80 rounded-full flex items-center justify-center text-teal-600 shadow-sm border border-white hover:bg-white transition-all transform hover:scale-105 active:scale-95"><Plus size={18} strokeWidth={2.5} /></button>
+                                            )}
+                                        </div>
+                                    </div>
+                                    )
                                 ))}
                             </div>
                         </div>
@@ -460,8 +551,7 @@ export default function MenuPage() {
             {Object.keys(cart).length > 0 && (
                 <div className="fixed bottom-6 left-0 right-0 px-4 z-30 animate-fade-in-up flex justify-center">
                     <button
-                        onClick={handlePlaceOrder}
-                        disabled={isPlacingOrder}
+                        onClick={() => setShowCart(true)}
                         className="glass-panel w-full max-w-sm rounded-full p-2 pl-4 pr-2 flex items-center justify-between shadow-[0_8px_30px_rgba(20,184,166,0.3)] hover:scale-[1.02] active:scale-95 transition-all"
                     >
                         <div className="flex items-center gap-3">
@@ -472,16 +562,91 @@ export default function MenuPage() {
                         </div>
 
                         <div className="bg-gradient-to-r from-teal-400 to-emerald-500 text-white px-6 py-3 rounded-full font-bold text-sm tracking-wide shadow-md flex items-center gap-2">
-                            {isPlacingOrder ? (
-                                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                                </svg>
-                            ) : (
-                                <>Place Order</>
-                            )}
+                            <ShoppingCart size={16} /> View Cart
                         </div>
                     </button>
+                </div>
+            )}
+
+            {/* Cart Drawer Modal */}
+            {showCart && (
+                <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 backdrop-blur-sm animate-fade-in-up" onClick={() => setShowCart(false)}>
+                    <div className="bg-white rounded-t-3xl w-full max-w-md shadow-2xl overflow-hidden flex flex-col max-h-[85vh]" onClick={(e) => e.stopPropagation()}>
+                        <div className="p-5 border-b flex justify-between items-center bg-gradient-to-r from-teal-500 to-emerald-500 text-white">
+                            <h2 className="text-xl font-bold flex items-center gap-2">
+                                <ShoppingCart size={20} /> Your Cart
+                            </h2>
+                            <button onClick={() => setShowCart(false)} className="p-2 text-white/80 hover:text-white hover:bg-white/20 rounded-full transition">
+                                <XCircle size={24} />
+                            </button>
+                        </div>
+                        <div className="overflow-y-auto p-5 space-y-3 flex-grow">
+                            {Object.entries(cart).length === 0 ? (
+                                <p className="text-center text-gray-500 py-8">Your cart is empty.</p>
+                            ) : (
+                                Object.entries(cart).map(([itemId, qty]) => {
+                                    const item = menuItems.find(i => i.id === itemId);
+                                    if (!item) return null;
+                                    return (
+                                        <div key={itemId} className="flex items-center gap-3 p-3 bg-gray-50 rounded-2xl border border-gray-100">
+                                            <div className="w-14 h-14 bg-gray-100 rounded-xl flex-shrink-0 overflow-hidden">
+                                                {item.image_url ? (
+                                                    <img src={item.image_url} alt={item.name} className="w-full h-full object-cover rounded-xl" />
+                                                ) : (
+                                                    <div className="w-full h-full flex items-center justify-center"><Coffee size={18} className="opacity-30" /></div>
+                                                )}
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                                <h4 className="font-bold text-gray-900 text-sm line-clamp-1">{item.name}</h4>
+                                                <p className="text-xs text-teal-600 font-bold">₹{(item.price * qty).toFixed(2)}</p>
+                                            </div>
+                                            <div className="flex items-center gap-1">
+                                                <div className="flex items-center bg-white rounded-full p-0.5 shadow-sm border border-gray-200">
+                                                    <button onClick={() => removeFromCart(itemId)} className="w-7 h-7 rounded-full flex items-center justify-center text-gray-500 hover:bg-gray-100 transition"><Minus size={14} /></button>
+                                                    <span className="w-6 text-center font-bold text-gray-900 text-sm">{qty}</span>
+                                                    <button onClick={() => addToCart(itemId)} className="w-7 h-7 rounded-full flex items-center justify-center text-teal-600 hover:bg-teal-50 transition"><Plus size={14} /></button>
+                                                </div>
+                                                <button onClick={() => setCart(prev => { const c = {...prev}; delete c[itemId]; return c; })} className="w-7 h-7 rounded-full flex items-center justify-center text-red-400 hover:bg-red-50 transition">
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
+                        {Object.keys(cart).length > 0 && (
+                            <div className="p-5 border-t bg-white shrink-0 space-y-3">
+                                <div className="space-y-1.5">
+                                    <div className="flex justify-between text-sm text-gray-600">
+                                        <span>Subtotal</span>
+                                        <span>₹{cartTotal.toFixed(2)}</span>
+                                    </div>
+                                    {settings && settings.charge_amount > 0 && (
+                                        <div className="flex justify-between text-sm text-gray-500">
+                                            <span>Charges ({settings.charge_type === 'percentage' ? `${settings.charge_amount}%` : 'Fixed'})</span>
+                                            <span>₹{(calculateTotalWithCharges() - cartTotal).toFixed(2)}</span>
+                                        </div>
+                                    )}
+                                    <div className="flex justify-between text-lg font-black text-teal-900 border-t pt-2">
+                                        <span>Total</span>
+                                        <span>₹{calculateTotalWithCharges().toFixed(2)}</span>
+                                    </div>
+                                </div>
+                                <button
+                                    onClick={handlePlaceOrder}
+                                    disabled={isPlacingOrder}
+                                    className="w-full bg-gradient-to-r from-teal-500 to-emerald-500 text-white font-bold py-3.5 rounded-2xl shadow-lg shadow-teal-200 transition-all hover:shadow-xl active:scale-[0.98] disabled:opacity-50 flex items-center justify-center gap-2"
+                                >
+                                    {isPlacingOrder ? (
+                                        <svg className="animate-spin h-5 w-5 text-white" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                    ) : (
+                                        <>Place Order</>
+                                    )}
+                                </button>
+                            </div>
+                        )}
+                    </div>
                 </div>
             )}
 
@@ -520,6 +685,172 @@ export default function MenuPage() {
                                 ))
                             )}
                         </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Payment Modal */}
+            {showPaymentModal && settings && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-fade-in-up">
+                    <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl p-6 text-center">
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-xl font-bold text-gray-900">Scan to Pay</h2>
+                            <button onClick={() => setShowPaymentModal(false)} className="text-gray-400 hover:text-gray-600">
+                                <XCircle size={24} />
+                            </button>
+                        </div>
+                        
+                        <div className="bg-gray-50 p-4 rounded-xl mb-6">
+                            <div className="flex justify-between text-sm text-gray-500 mb-2">
+                                <span>Subtotal</span>
+                                <span>₹{cartTotal.toFixed(2)}</span>
+                            </div>
+                            {settings.charge_amount > 0 && (
+                                <div className="flex justify-between text-sm text-gray-500 mb-2 border-b border-gray-200 pb-2">
+                                    <span>Taxes & Charges ({settings.charge_type === 'percentage' ? `${settings.charge_amount}%` : 'Fixed'})</span>
+                                    <span>₹{(calculateTotalWithCharges() - cartTotal).toFixed(2)}</span>
+                                </div>
+                            )}
+                            <div className="flex justify-between font-black text-lg text-teal-900 mt-2">
+                                <span>Total to Pay</span>
+                                <span>₹{calculateTotalWithCharges().toFixed(2)}</span>
+                            </div>
+                        </div>
+
+                        {settings.upi_id && (
+                            <div className="flex flex-col items-center mb-6">
+                                <div className="bg-white p-2 rounded-xl border-2 border-teal-100 shadow-sm mb-3">
+                                    <img 
+                                        src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`upi://pay?pa=${settings.upi_id}&pn=${settings.payee_name || 'Cafe'}&am=${calculateTotalWithCharges().toFixed(2)}&tn=Table_${tableNumber || tableId}&cu=INR`)}`} 
+                                        alt="UPI QR Code" 
+                                        className="w-48 h-48"
+                                    />
+                                </div>
+                                <p className="text-xs font-bold text-gray-500 mb-3 uppercase tracking-wider">Scan with any UPI App</p>
+                                
+                                {/* Deep link for mobile users */}
+                                <a 
+                                    href={`upi://pay?pa=${settings.upi_id}&pn=${settings.payee_name || 'Cafe'}&am=${calculateTotalWithCharges().toFixed(2)}&tn=Table_${tableNumber || tableId}&cu=INR`}
+                                    className="w-full bg-teal-50 hover:bg-teal-100 text-teal-700 font-bold py-3 px-4 rounded-xl transition border border-teal-200 mb-2 text-sm text-center block"
+                                >
+                                    Pay with UPI Apps
+                                </a>
+                            </div>
+                        )}
+
+                        <button
+                            onClick={() => executeOrderPlacement('paid')}
+                            disabled={isPlacingOrder}
+                            className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3.5 px-4 rounded-xl transition shadow-lg shadow-teal-200 disabled:opacity-50"
+                        >
+                            {isPlacingOrder ? 'Processing...' : 'I have Paid, Place Order'}
+                        </button>
+                        <p className="text-[10px] text-gray-400 mt-3">By clicking this, you confirm you have completed the payment.</p>
+                    </div>
+                </div>
+            )}
+
+            {/* Incoming Payment Request Modal (triggered by Manager) */}
+            {incomingPayment && settings && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fade-in-up">
+                    <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl p-6 text-center">
+                        <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-4 animate-pulse">
+                            <Bell size={32} className="text-amber-600" />
+                        </div>
+                        <h2 className="text-xl font-black text-gray-900 mb-1">Payment Requested</h2>
+                        <p className="text-sm text-gray-500 mb-5">The restaurant is requesting payment for your order.</p>
+
+                        <div className="bg-teal-50 p-4 rounded-xl mb-6">
+                            <div className="flex justify-between font-black text-2xl text-teal-900">
+                                <span>Total:</span>
+                                <span>{'\u20B9'}{incomingPayment.amount.toFixed(2)}</span>
+                            </div>
+                        </div>
+
+                        {settings.upi_id && (
+                            <div className="flex flex-col items-center mb-5">
+                                <div className="bg-white p-2 rounded-xl border-2 border-teal-100 shadow-sm mb-3">
+                                    <img 
+                                        src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`upi://pay?pa=${settings.upi_id}&pn=${settings.payee_name || 'Cafe'}&am=${incomingPayment.amount.toFixed(2)}&tn=Table_${tableNumber || tableId}&cu=INR`)}`} 
+                                        alt="UPI QR Code" 
+                                        className="w-48 h-48"
+                                    />
+                                </div>
+                                <p className="text-xs font-bold text-gray-500 mb-3 uppercase tracking-wider">Scan with any UPI App</p>
+                                <a 
+                                    href={`upi://pay?pa=${settings.upi_id}&pn=${settings.payee_name || 'Cafe'}&am=${incomingPayment.amount.toFixed(2)}&tn=Table_${tableNumber || tableId}&cu=INR`}
+                                    className="w-full bg-teal-50 hover:bg-teal-100 text-teal-700 font-bold py-3 px-4 rounded-xl transition border border-teal-200 mb-2 text-sm text-center block"
+                                >
+                                    Pay with UPI Apps
+                                </a>
+                            </div>
+                        )}
+
+                        <button
+                            onClick={() => setIncomingPayment(null)}
+                            className="w-full bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold py-3 px-4 rounded-xl transition text-sm"
+                        >
+                            Dismiss
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Self Pay Modal (Initiated by Customer) */}
+            {showSelfPay && settings && (
+                <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/70 backdrop-blur-md animate-fade-in-up">
+                    <div className="bg-white rounded-3xl w-full max-w-sm shadow-2xl p-6 text-center">
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-xl font-bold text-gray-900">Pay Now</h2>
+                            <button onClick={() => setShowSelfPay(false)} className="text-gray-400 hover:text-gray-600">
+                                <XCircle size={24} />
+                            </button>
+                        </div>
+                        
+                        <div className="bg-gray-50 p-4 rounded-xl mb-6">
+                            <div className="flex justify-between text-sm text-gray-500 mb-2">
+                                <span>Subtotal</span>
+                                <span>₹{runningTotal.toFixed(2)}</span>
+                            </div>
+                            {settings.charge_amount > 0 && (
+                                <div className="flex justify-between text-sm text-gray-500 mb-2 border-b border-gray-200 pb-2">
+                                    <span>Taxes & Charges ({settings.charge_type === 'percentage' ? `${settings.charge_amount}%` : 'Fixed'})</span>
+                                    <span>₹{(calculateSelfPayTotal() - runningTotal).toFixed(2)}</span>
+                                </div>
+                            )}
+                            <div className="flex justify-between font-black text-lg text-teal-900 mt-2">
+                                <span>Total to Pay</span>
+                                <span>₹{calculateSelfPayTotal().toFixed(2)}</span>
+                            </div>
+                        </div>
+
+                        {settings.upi_id && (
+                            <div className="flex flex-col items-center mb-6">
+                                <div className="bg-white p-2 rounded-xl border-2 border-teal-100 shadow-sm mb-3">
+                                    <img 
+                                        src={`https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(`upi://pay?pa=${settings.upi_id}&pn=${settings.payee_name || 'Cafe'}&am=${calculateSelfPayTotal().toFixed(2)}&tn=Table_${tableNumber || tableId}&cu=INR`)}`} 
+                                        alt="UPI QR Code" 
+                                        className="w-48 h-48"
+                                    />
+                                </div>
+                                <p className="text-xs font-bold text-gray-500 mb-3 uppercase tracking-wider">Scan with any UPI App</p>
+                                
+                                <a 
+                                    href={`upi://pay?pa=${settings.upi_id}&pn=${settings.payee_name || 'Cafe'}&am=${calculateSelfPayTotal().toFixed(2)}&tn=Table_${tableNumber || tableId}&cu=INR`}
+                                    className="w-full bg-teal-50 hover:bg-teal-100 text-teal-700 font-bold py-3 px-4 rounded-xl transition border border-teal-200 mb-2 text-sm text-center block"
+                                >
+                                    Pay with UPI Apps
+                                </a>
+                            </div>
+                        )}
+
+                        <button
+                            onClick={handleSelfPayConfirm}
+                            className="w-full bg-teal-600 hover:bg-teal-700 text-white font-bold py-3.5 px-4 rounded-xl transition shadow-lg shadow-teal-200"
+                        >
+                            I have Paid
+                        </button>
+                        <p className="text-[10px] text-gray-400 mt-3">By clicking this, you confirm you have completed the payment.</p>
                     </div>
                 </div>
             )}

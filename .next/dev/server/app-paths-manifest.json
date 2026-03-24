@@ -1,0 +1,14 @@
+{
+  "/[table_uuid]/page": "app/[table_uuid]/page.js",
+  "/_not-found/page": "app/_not-found/page.js",
+  "/admin/dashboard/page": "app/admin/dashboard/page.js",
+  "/admin/login/page": "app/admin/login/page.js",
+  "/admin/menu/page": "app/admin/menu/page.js",
+  "/admin/orders/page": "app/admin/orders/page.js",
+  "/admin/settings/page": "app/admin/settings/page.js",
+  "/admin/tables/page": "app/admin/tables/page.js",
+  "/api/checkout/route": "app/api/checkout/route.js",
+  "/api/orders/route": "app/api/orders/route.js",
+  "/menu/page": "app/menu/page.js",
+  "/page": "app/page.js"
+}
