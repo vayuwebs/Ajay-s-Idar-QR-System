@@ -11,7 +11,7 @@ export interface AppSettings {
 
 export const getSettings = async (): Promise<AppSettings | null> => {
     const { data, error } = await supabase
-        .from('settings')
+        .from('cafe_settings')
         .select('*')
         .eq('id', 1)
         .single();
@@ -25,7 +25,7 @@ export const getSettings = async (): Promise<AppSettings | null> => {
 
 export const updateSettings = async (updates: Partial<AppSettings>): Promise<boolean> => {
     const { error } = await supabase
-        .from('settings')
+        .from('cafe_settings')
         .update({ ...updates, updated_at: new Date().toISOString() })
         .eq('id', 1);
 
